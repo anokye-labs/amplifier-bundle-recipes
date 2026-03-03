@@ -1,0 +1,120 @@
+name: "multi-file-analysis"
+description: "Analyze multiple files in parallel with per-file insights and consolidated summary"
+version: "1.1.0"
+author: "Amplifier Recipes Collection"
+tags: ["analysis", "bulk-processing", "looping", "parallel", "python"]
+
+# This recipe demonstrates the foreach looping pattern with parallel execution:
+# 1. Iterate over a list of files (foreach with parallel: true)
+# 2. Analyze ALL files concurrently (not sequentially!)
+# 3. Collect all analyses into a list
+# 4. Synthesize findings into actionable summary
+#
+# The parallel foreach pattern is ideal when:
+# - Each item needs individual attention
+# - Items are INDEPENDENT (no dependencies between iterations)
+# - Results should be collected for later synthesis
+# - Processing can continue on individual failures (on_error: continue)
+#
+# Typical runtime: 30-60 seconds (parallel) vs 2-5 minutes (sequential)
+# Required agents: zen-architect
+#
+# Usage (with file list):
+#   amplifier run "execute multi-file-analysis.yaml with files=['src/auth.py','src/models.py','src/utils.py']"
+#
+# Usage (with glob discovery - let the agent find files first):
+#   amplifier run "find all *.py files in src/ then execute multi-file-analysis.yaml with those files"
+
+context:
+  # Files to analyze - provide as JSON array
+  files:
+    - "README.md"
+  focus: "code quality and maintainability"
+
+steps:
+  # Step 1: Analyze each file in parallel
+  # Uses foreach with parallel: true to analyze ALL files concurrently
+  # Each iteration's result is collected into "file_analyses"
+  - id: "analyze-each-file"
+    foreach: "{{files}}"
+    as: "current_file"
+    parallel: 3  # Analyze up to 3 files in parallel
+    collect: "file_analyses"
+    max_iterations: 20
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Analyze {{current_file}} focusing on: {{focus}}
+
+      Provide a concise analysis covering:
+
+      1. **Purpose**: What does this file do? (1-2 sentences)
+      2. **Quality**: Rate 1-5 stars with brief justification
+      3. **Issues**: List specific problems found (or "None" if clean)
+      4. **Suggestions**: Top 1-3 improvements (prioritized)
+
+      Keep response focused and actionable. Format as:
+
+      ## {{current_file}}
+      **Purpose**: ...
+      **Quality**: ⭐⭐⭐⭐ (4/5) - ...
+      **Issues**: ...
+      **Suggestions**: ...
+    timeout: 300
+    on_error: "continue"
+
+  # Step 2: Synthesize all analyses into summary
+  # This step receives the collected array of all file analyses
+  - id: "create-summary"
+    agent: "foundation:zen-architect"
+    mode: "ARCHITECT"
+    prompt: |
+      Create an executive summary from these individual file analyses:
+
+      {{file_analyses}}
+
+      Focus area: {{focus}}
+      Files analyzed: {{files}}
+
+      Synthesize into:
+
+      ## Executive Summary
+      - Files analyzed: [count]
+      - Overall quality: [assessment]
+      - Key patterns observed
+
+      ## Priority Issues
+      Consolidate the most important issues across all files.
+      Group by type (not by file) for actionable improvements.
+
+      ## Recommendations
+      Top 3-5 actionable recommendations that would have the highest impact.
+      Reference specific files where relevant.
+
+      ## Files Requiring Attention
+      List files that scored poorly or have critical issues.
+
+      Keep the summary concise but comprehensive.
+    output: "summary_report"
+    timeout: 300
+
+# Example execution flow (PARALLEL):
+#
+# Given: files = ["auth.py", "models.py", "utils.py"]
+#
+# 1. analyze-each-file runs ALL iterations concurrently:
+#    - auth.py analysis    ─┬─→ all run at the same time
+#    - models.py analysis  ─┤   (not sequentially!)
+#    - utils.py analysis   ─┘
+#    - Results collected in original order when all complete
+#    - file_analyses = [auth_analysis, models_analysis, utils_analysis]
+#
+# 2. create-summary receives all analyses and creates consolidated report
+#
+# Output variables:
+#   file_analyses: [analysis1, analysis2, analysis3]  # Preserves input order
+#   summary_report: Consolidated executive summary
+#
+# Performance comparison (3 files, ~30s each):
+#   Sequential: 30s + 30s + 30s = ~90 seconds
+#   Parallel:   max(30s, 30s, 30s) = ~30 seconds  (3x faster!)
