@@ -40,7 +40,7 @@ steps:
       Be concise but thorough.
     foreach: "{{perspectives}}"
     as: "perspective"
-    parallel: true  # Run all perspectives simultaneously
+    parallel: 3  # Run up to 3 perspectives in parallel
     collect: "analyses"
     timeout: 300
 

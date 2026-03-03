@@ -38,7 +38,7 @@ steps:
   - id: "analyze-each-file"
     foreach: "{{files}}"
     as: "current_file"
-    parallel: true  # Analyze all files concurrently!
+    parallel: 3  # Analyze up to 3 files in parallel
     collect: "file_analyses"
     max_iterations: 20
     agent: "foundation:zen-architect"
