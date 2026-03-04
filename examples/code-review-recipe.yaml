@@ -1,0 +1,235 @@
+name: "code-review-comprehensive"
+description: "Multi-stage code review with conditional execution and model selection for cost/capability optimization"
+version: "1.2.0"
+author: "Amplifier Recipes Collection"
+tags: ["code-review", "quality", "analysis", "python", "conditional", "model-selection"]
+
+# This recipe performs comprehensive code review with smart routing:
+# 1. Analyze code structure and patterns
+# 2. Identify specific issues and anti-patterns
+# 3. Assess overall severity (none/low/medium/high/critical)
+# 4. If issues found: generate improvements (skipped for clean code)
+# 5. For critical/high: validate suggestions (skipped for lower severity)
+# 6. For clean code: quick approval path
+#
+# Conditional execution saves time by skipping unnecessary steps:
+# - Clean code (severity=none) → quick-approval path
+# - Low/medium issues → suggestions only (no deep validation)
+# - Critical/high issues → full review with validation
+#
+# MODEL SELECTION STRATEGY:
+# This recipe demonstrates cost/capability optimization by matching models to tasks:
+# - claude-haiku: Fast, cheap - for simple classification (assess-severity, quick-approval)
+# - claude-sonnet-*: Balanced - for thorough analysis (analyze-structure, identify-issues)
+# - claude-opus-*: Powerful - for strategic design (suggest-improvements, validate-suggestions)
+#
+# Glob patterns (e.g., claude-sonnet-*) auto-select the latest model version.
+#
+# Typical runtime: 2-10 minutes (depends on code quality)
+# Required agents: zen-architect
+#
+# Usage:
+#   amplifier run "execute code-review-recipe.yaml with file_path=src/auth.py"
+
+context:
+  file_path: ""  # Required: path to Python file to review
+
+steps:
+  # Step 1: Analyze structure
+  # Model: sonnet - thorough analysis needs good reasoning
+  - id: "analyze-structure"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    provider: "anthropic"
+    model: "claude-sonnet-*"
+    prompt: |
+      Analyze the code structure in {{file_path}}:
+
+      1. Overall architecture and organization
+      2. Code patterns and design choices
+      3. Complexity assessment
+      4. Alignment with implementation philosophy principles
+
+      Provide a structured analysis focusing on what exists and how it works.
+    output: "structure_analysis"
+    timeout: 600
+
+  # Step 2: Identify issues
+  # Model: sonnet - thorough issue detection, balanced capability
+  - id: "identify-issues"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    provider: "anthropic"
+    model: "claude-sonnet-*"
+    prompt: |
+      Based on this analysis: {{structure_analysis}}
+
+      Identify specific issues in {{file_path}}:
+
+      1. Anti-patterns and code smells
+      2. Complexity hotspots
+      3. Philosophy violations (unnecessary abstraction, future-proofing, etc.)
+      4. Potential bugs or edge cases
+
+      For each issue, provide:
+      - Location (line numbers or function names)
+      - Severity (critical/high/medium/low)
+      - Explanation of the problem
+      - Impact on maintainability
+
+      Focus on issues that genuinely impact quality, not style preferences.
+
+      If the code is clean with no significant issues, explicitly state:
+      "No significant issues found. Code quality is good."
+    output: "identified_issues"
+    timeout: 600
+
+  # Step 3: Classify severity
+  # Model: haiku - simple one-word classification, no reasoning needed
+  - id: "assess-severity"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    provider: "anthropic"
+    model: "claude-haiku"
+    prompt: |
+      Based on the identified issues: {{identified_issues}}
+
+      Determine the OVERALL severity level for this code review.
+
+      Respond with EXACTLY ONE of these words (nothing else):
+      - none (no issues found, code is clean)
+      - low (only minor style or documentation issues)
+      - medium (some issues but code works correctly)
+      - high (significant problems affecting maintainability)
+      - critical (bugs, security issues, or major design flaws)
+
+      Consider the highest severity issue found. If no issues were found,
+      respond with: none
+    output: "severity"
+    timeout: 60
+
+  # Step 4: Design improvements (when issues found)
+  # Model: opus - strategic design decisions need the best reasoning
+  - id: "suggest-improvements"
+    agent: "foundation:zen-architect"
+    mode: "ARCHITECT"
+    provider: "anthropic"
+    model: "claude-opus-*"
+    condition: "{{severity}} != 'none'"
+    prompt: |
+      Given this analysis: {{structure_analysis}}
+      And these issues: {{identified_issues}}
+      Overall severity: {{severity}}
+
+      Design concrete improvement suggestions for {{file_path}}:
+
+      1. For each critical/high issue, provide specific solution
+      2. Suggest refactoring opportunities (where they genuinely simplify)
+      3. Recommend testing strategies
+      4. Identify what should be kept (don't change for the sake of change)
+
+      For each suggestion:
+      - What to change
+      - Why it improves the code
+      - How to implement (specific steps)
+      - Potential risks or trade-offs
+
+      Prioritize ruthless simplicity over clever solutions.
+    output: "improvement_suggestions"
+    timeout: 600
+
+  # Step 5: Validate critical suggestions
+  # Model: opus - critical/high severity needs careful validation
+  - id: "validate-suggestions"
+    agent: "foundation:zen-architect"
+    mode: "REVIEW"
+    provider: "anthropic"
+    model: "claude-opus-*"
+    condition: "{{severity}} == 'critical' or {{severity}} == 'high'"
+    prompt: |
+      Review these improvement suggestions: {{improvement_suggestions}}
+
+      For the file: {{file_path}}
+      With these issues: {{identified_issues}}
+      Severity level: {{severity}}
+
+      This is a {{severity}}-severity review, so thorough validation is critical.
+
+      Validate each suggestion:
+
+      1. Feasibility: Can this be implemented safely?
+      2. Value: Does this genuinely improve the code?
+      3. Scope: Is this the right level of change?
+      4. Philosophy alignment: Does this follow ruthless simplicity?
+
+      Provide:
+      - Priority ranking (must-do / should-do / nice-to-have)
+      - Implementation order (dependencies between changes)
+      - Time estimates (rough effort)
+      - Any suggestions to drop (not worth the effort)
+
+      Be honest about what's truly valuable vs what's just "different".
+    output: "validated_suggestions"
+    timeout: 300
+
+  # Step 6: Quick approval (for clean code)
+  # Model: haiku - simple summary, no complex reasoning needed
+  - id: "quick-approval"
+    agent: "foundation:zen-architect"
+    mode: "REVIEW"
+    provider: "anthropic"
+    model: "claude-haiku"
+    condition: "{{severity}} == 'none'"
+    prompt: |
+      Based on this analysis: {{structure_analysis}}
+      And this assessment: {{identified_issues}}
+
+      The code in {{file_path}} appears to be clean with no significant issues.
+
+      Provide a brief approval summary:
+
+      1. Confirm the code quality assessment
+      2. Note any minor suggestions (optional improvements, not requirements)
+      3. Highlight what's done well (patterns worth preserving)
+
+      Keep the response concise - this is the fast-track approval path.
+    output: "approval_summary"
+    timeout: 60
+
+# MODEL SELECTION SUMMARY:
+#
+# Step                  | Model      | Why
+# --------------------- | ---------- | ------------------------------------------------
+# analyze-structure     | sonnet-*   | Thorough analysis, balanced speed/capability
+# identify-issues       | sonnet-*   | Detailed issue detection, good reasoning
+# assess-severity       | haiku      | Simple classification, one-word answer
+# suggest-improvements  | opus-*     | Strategic design needs best reasoning
+# validate-suggestions  | opus-*     | Critical validation needs best reasoning
+# quick-approval        | haiku      | Brief summary, no complex reasoning
+#
+# Cost optimization: haiku steps are ~10x cheaper than opus
+# Capability matching: opus reserved for strategic/critical decisions
+
+# Example output structure depends on severity:
+#
+# For clean code (severity=none):
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: "No significant issues found..."
+#   severity: "none"
+#   approval_summary: Brief approval with optional minor suggestions
+#   (suggest-improvements and validate-suggestions are SKIPPED)
+#
+# For low/medium severity:
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: List of issues with severity and location
+#   severity: "low" or "medium"
+#   improvement_suggestions: Concrete solutions with implementation steps
+#   (validate-suggestions and quick-approval are SKIPPED)
+#
+# For high/critical severity:
+#   structure_analysis: Code organization, patterns, complexity assessment
+#   identified_issues: List of issues with severity and location
+#   severity: "high" or "critical"
+#   improvement_suggestions: Concrete solutions with implementation steps
+#   validated_suggestions: Prioritized, feasible action items
+#   (quick-approval is SKIPPED)

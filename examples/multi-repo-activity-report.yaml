@@ -1,0 +1,327 @@
+name: "multi-repo-activity-report"
+description: "Generate activity reports across multiple GitHub repositories. Provide repos as a list or manifest file."
+version: "1.0.0"
+author: "Amplifier Recipes"
+tags: ["github", "multi-repo", "activity", "reports", "analysis"]
+
+# Multi-Repository Activity Report Recipe
+#
+# Analyzes multiple GitHub repositories for commits and PRs, then synthesizes
+# a comprehensive report. Provide repos either as a JSON list or a path to
+# a manifest file.
+#
+# Usage (in a session - recommended):
+#   "run multi-repo-activity-report for amplifier-core and amplifier-foundation"
+#
+# Usage (CLI - with repo list):
+#   amplifier tool invoke recipes operation=execute \
+#     recipe_path=multi-repo-activity-report.yaml \
+#     context='{"repos": [{"owner": "microsoft", "name": "amplifier-core", "url": "https://github.com/microsoft/amplifier-core"}]}'
+#
+# Usage (CLI - with manifest file):
+#   amplifier tool invoke recipes operation=execute \
+#     recipe_path=multi-repo-activity-report.yaml \
+#     context='{"repos_manifest": "./repos-to-analyze.json"}'
+#
+# Usage (CLI - custom date range):
+#   amplifier tool invoke recipes operation=execute \
+#     recipe_path=multi-repo-activity-report.yaml \
+#     context='{"repos": [...], "date_range": "last 7 days"}'
+#
+# Manifest file format (JSON array):
+#   [
+#     {"owner": "microsoft", "name": "amplifier-core", "url": "https://github.com/microsoft/amplifier-core"},
+#     {"owner": "microsoft", "name": "other-repo", "url": "https://github.com/microsoft/other-repo"}
+#   ]
+#
+# Requirements:
+#   - gh CLI installed and authenticated
+#   - repo-activity-analysis.yaml recipe (in same directory)
+
+recursion:
+  max_depth: 3
+  max_total_steps: 300
+
+context:
+  # Option 1: Provide repos as JSON array
+  repos: []
+  
+  # Option 2: Path to JSON manifest file with repos array
+  repos_manifest: ""
+  
+  # Date range (natural language) - defaults to yesterday
+  date_range: "since yesterday"
+  
+  # Working directory for intermediate files
+  working_dir: "./ai_working"
+  
+  # Report output filename
+  report_filename: "activity-report.md"
+
+stages:
+  # ==========================================================================
+  # STAGE 1: Setup and Validation
+  # ==========================================================================
+  - name: "setup"
+    steps:
+      - id: "load-repos"
+        agent: "foundation:modular-builder"
+        parse_json: true
+        prompt: |
+          Load and validate the list of repositories to analyze.
+          
+          ## Inputs
+          
+          Repos array: {{repos}}
+          Manifest path: "{{repos_manifest}}"
+          
+          ## Logic
+          
+          1. Create working directories:
+          ```bash
+          mkdir -p {{working_dir}}/analyses
+          mkdir -p {{working_dir}}/reports
+          ```
+          
+          2. Load repos from either source:
+          
+          If repos array is non-empty:
+            - Use the provided array directly
+          
+          If repos_manifest path is provided and repos is empty:
+            - Read the manifest file: `cat "{{repos_manifest}}"`
+            - Parse as JSON array
+          
+          If both are empty:
+            - Return error: "No repos provided. Set either 'repos' array or 'repos_manifest' path."
+          
+          3. Validate each repo has required fields:
+             - owner (required)
+             - name (required)  
+             - url (optional - can be constructed from owner/name)
+          
+          4. Normalize URLs if missing:
+             - url = "https://github.com/{owner}/{name}"
+          
+          5. Write validated repos to: {{working_dir}}/repos-manifest.json
+          
+          ## Output
+          
+          Return:
+          {
+            "source": "provided_array" | "manifest_file",
+            "total_repos": N,
+            "repos": [
+              {"owner": "...", "name": "...", "url": "..."},
+              ...
+            ],
+            "manifest_path": "{{working_dir}}/repos-manifest.json",
+            "error": null | "error message"
+          }
+        output: "repos_data"
+        timeout: 120
+        on_error: "fail"
+
+      - id: "prepare-analysis-plan"
+        agent: "foundation:zen-architect"
+        mode: "ANALYZE"
+        prompt: |
+          Create an analysis plan summary for the approval gate.
+          
+          Repos to analyze: {{repos_data.repos}}
+          Total repos: {{repos_data.total_repos}}
+          Date range: "{{date_range}}"
+          Working dir: {{working_dir}}
+          
+          Create a clear markdown summary:
+          
+          ## Analysis Plan
+          
+          **Date Range**: {{date_range}}
+          **Total Repositories**: {{repos_data.total_repos}}
+          
+          ### Repositories to Analyze
+          
+          | Repository | Owner | URL |
+          |------------|-------|-----|
+          | ... | ... | ... |
+          
+          ### Scope Estimate
+          
+          - Number of repos: N
+          - Estimated time: ~X minutes (1-2 min per repo)
+          - Output location: {{working_dir}}/reports/{{report_filename}}
+          
+          This summary will be shown at the approval gate.
+        output: "analysis_plan"
+        timeout: 120
+
+    approval:
+      required: true
+      prompt: |
+        ## Ready for Multi-Repository Analysis
+        
+        {{analysis_plan}}
+        
+        **Approve** to begin analyzing each repository for activity.
+        **Deny** to adjust the repository list or date range.
+      timeout: 0
+      default: "deny"
+
+  # ==========================================================================
+  # STAGE 2: Per-Repository Analysis (using sub-recipe)
+  # ==========================================================================
+  - name: "analysis"
+    steps:
+      - id: "analyze-repos"
+        foreach: "{{repos_data.repos}}"
+        as: "repo"
+        parallel: false
+        collect: "repo_analyses"
+        type: "recipe"
+        recipe: "repo-activity-analysis.yaml"
+        context:
+          repo_url: "{{repo.url}}"
+          date_range: "{{date_range}}"
+          working_dir: "{{working_dir}}"
+          include_deep_dive: false
+        output: "single_repo_result"
+        timeout: 600
+        on_error: "continue"
+
+  # ==========================================================================
+  # STAGE 3: Synthesis and Report Generation
+  # ==========================================================================
+  - name: "synthesis"
+    steps:
+      - id: "aggregate-results"
+        agent: "foundation:modular-builder"
+        parse_json: true
+        prompt: |
+          Aggregate the per-repo analysis results.
+          
+          Results from each repo: {{repo_analyses}}
+          
+          Read the individual analysis files from {{working_dir}}/analyses/
+          
+          Aggregate into a single JSON file at: {{working_dir}}/aggregate-data.json
+          
+          Structure:
+          {
+            "date_range": "{{date_range}}",
+            "total_repos": N,
+            "repos_with_activity": N,
+            "repos_without_activity": N,
+            "total_commits": N,
+            "total_prs": N,
+            "by_repo": [
+              {
+                "repo": "name",
+                "owner": "owner",
+                "commits": N,
+                "prs": N,
+                "impact": "level",
+                "summary_path": "path to summary"
+              }
+            ],
+            "errors": ["any repos that failed"]
+          }
+          
+          Return the aggregate summary.
+        output: "aggregate_data"
+        timeout: 300
+
+      - id: "generate-report"
+        agent: "foundation:zen-architect"
+        mode: "ARCHITECT"
+        prompt: |
+          Generate the final multi-repository activity report.
+          
+          ## Input Data
+          
+          Aggregate data: {{aggregate_data}}
+          Individual analyses: Read from {{working_dir}}/analyses/*-analysis.json
+          Date range: "{{date_range}}"
+          
+          ## Report Structure
+          
+          Create a comprehensive markdown report:
+          
+          ```markdown
+          # Multi-Repository Activity Report
+          
+          **Generated**: [current date/time - run `date`]
+          **Date Range**: {{date_range}}
+          **Repositories Analyzed**: N
+          
+          ## Executive Summary
+          
+          - Total repositories analyzed: N
+          - Repositories with activity: N
+          - Total commits: N
+          - Total PRs: N
+          - Key observations (2-3 bullet points highlighting notable changes)
+          
+          ## Activity by Repository
+          
+          [For each repo WITH activity, in order of most activity:]
+          
+          ### {repo_name}
+          
+          **Commits**: N | **PRs**: N | **Impact**: level
+          
+          **Key Changes**:
+          - [bullet points of significant changes]
+          
+          **Notable PRs**:
+          - [any merged or significant PRs with links]
+          
+          ---
+          
+          ## Cross-Cutting Themes
+          
+          [Patterns observed across multiple repos, if any]
+          
+          ## Repositories with No Activity
+          
+          [List repos that had no changes in the date range]
+          
+          ## Errors/Skipped
+          
+          [Any repos that couldn't be analyzed and why]
+          
+          ---
+          *Report generated by multi-repo-activity-report recipe*
+          ```
+          
+          ## Write Report
+          
+          Write the complete report to: {{working_dir}}/reports/{{report_filename}}
+          
+          Return the full report content and the file path.
+        output: "final_report"
+        timeout: 600
+
+      - id: "completion"
+        agent: "foundation:modular-builder"
+        prompt: |
+          Provide completion summary.
+          
+          The report has been generated.
+          
+          Get the absolute path to the report file:
+          ```bash
+          realpath {{working_dir}}/reports/{{report_filename}}
+          ```
+          
+          Quick stats from aggregate: {{aggregate_data}}
+          
+          Return a brief completion message with:
+          - The absolute path to the report
+          - Number of repos analyzed
+          - Total commits and PRs found
+          - Any repos with errors
+          
+          Print the path clearly so the user knows where to find the report.
+        output: "completion_message"
+        timeout: 60

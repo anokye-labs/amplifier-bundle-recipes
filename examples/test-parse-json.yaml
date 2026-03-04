@@ -1,0 +1,62 @@
+name: "test-parse-json"
+description: "Test recipe to verify parse_json functionality"
+version: "1.0.0"
+tags: ["test", "parse-json"]
+
+# This recipe tests both behaviors:
+# 1. Default (parse_json: false) - preserves prose/markdown
+# 2. Opt-in (parse_json: true) - extracts JSON aggressively
+
+context:
+  test_data: "example"
+
+steps:
+  # Step 1: Default behavior - should preserve prose
+  - id: "prose-step"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Provide a brief analysis of the test data: {{test_data}}
+      
+      Include your response in natural language with markdown formatting.
+    output: "prose_output"
+    # parse_json: false (default) - preserves prose
+
+  # Step 2: Opt-in JSON extraction - should extract JSON even if wrapped in prose
+  - id: "json-step"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Extract structured data about the test input: {{test_data}}
+      
+      Return a JSON object with these fields:
+      {
+        "input": "the test data value",
+        "length": number of characters,
+        "type": "string"
+      }
+      
+      You may wrap this in explanation text if helpful.
+    output: "json_output"
+    parse_json: true  # Opt-in to aggressive extraction
+
+  # Step 3: Verify outputs
+  - id: "verify"
+    agent: "foundation:zen-architect"
+    mode: "ANALYZE"
+    prompt: |
+      Verify the outputs:
+      
+      Prose output (should be string): {{prose_output}}
+      
+      JSON output (should be parsed dict): {{json_output}}
+      
+      Confirm that:
+      1. prose_output is preserved as natural language
+      2. json_output is extracted as structured data
+    output: "verification"
+
+# Expected behavior:
+# - prose_output: Full prose/markdown response (string)
+# - json_output: Parsed JSON object (dict)
+# - verification: Confirmation that both worked correctly

@@ -1,0 +1,184 @@
+name: "session-verify"
+description: "Run cross-provider verification on a session with a specified verifier"
+version: "1.0.0"
+author: "Amplifier Recipes Collection"
+tags: ["verification", "audit", "quality", "session-analysis", "cross-provider"]
+
+# Cross-Provider Session Verification
+#
+# This recipe verifies that work done in a previous session actually
+# accomplished what was intended, using a DIFFERENT provider for verification.
+#
+# Why cross-provider verification?
+# - Different models have different blind spots and biases
+# - Anthropic verifying OpenAI work (and vice versa) catches more issues
+# - A model is unlikely to catch its own systematic errors
+#
+# IMPORTANT: verifier_provider is REQUIRED. Run session-extract first to see
+# what provider the original session used, then verify with a different one.
+#
+# Default models per provider (used when verifier_model not specified):
+#   openai    → gpt-5.2
+#   google    → gemini-3-pro-preview
+#   anthropic → claude-opus-4-5-20251101
+#
+# Usage:
+#   # First, extract session info to see what provider was used:
+#   amplifier run "execute session-extract.yaml with session_id=abc12345"
+#
+#   # Then verify with a different provider:
+#   amplifier run "execute session-verify.yaml with session_id=abc12345, verifier_provider=openai"
+#
+#   # With explicit model override:
+#   amplifier run "execute session-verify.yaml with session_id=abc12345, verifier_provider=openai, verifier_model=o1"
+
+context:
+  session_id: ""           # Required: session ID to verify (full or partial)
+  verifier_provider: ""    # Required: provider to use for verification (openai, anthropic, google)
+  verifier_model: ""       # Optional: override the default model for the provider
+
+# Validation: verifier_provider must be specified
+validation:
+  - field: "session_id"
+    required: true
+    error: "session_id is required. Specify the session to verify."
+  - field: "verifier_provider"
+    required: true
+    error: |
+      Error: verifier_provider is required.
+
+      To see what provider the original session used, run session-extract first:
+        session-extract with session_id=<your-session-id>
+
+      Then run verification with a different provider:
+        session-verify with session_id=<your-session-id> verifier_provider=openai
+
+      Available providers: openai, anthropic, google
+
+steps:
+  # Step 1: Quick extraction of session context needed for verification
+  # This provides the intent/claims/reality that the reviewer will assess
+  - id: "extract-session-context"
+    agent: "foundation:session-analyst"
+    prompt: |
+      Analyze session {{session_id}} and extract a VERIFICATION-FOCUSED summary.
+
+      Extract these layers concisely:
+
+      ## SESSION METADATA
+      ```
+      ORIGINAL_PROVIDER: [provider name]
+      ORIGINAL_MODEL: [model id]
+      ```
+
+      ## INTENT (What the user asked for)
+      - Each user request/instruction
+      - Constraints and clarifications
+      - Implicit requirements
+
+      ## CLAIMS (What the assistant said it did)
+      - Completion claims
+      - Caveats mentioned
+      - Success statements
+
+      ## REALITY (What actually happened)
+      - Files created/modified (list paths)
+      - Commands run and exit codes
+      - Test results (pass/fail)
+      - Build results
+      - Errors or warnings
+
+      ## POTENTIAL GAPS
+      Flag obvious discrepancies between intent/claims/reality.
+
+      Be thorough but concise - this will be reviewed by the verification agent.
+    output: "session_context"
+    timeout: 600
+
+  # Step 2: Verification review using the specified provider
+  # A fresh agent with no context from the original session
+  # provides an independent assessment
+  - id: "verification-review"
+    agent: "foundation:zen-architect"
+    mode: "REVIEW"
+    # Provider/model selection - user specifies provider, we use best model for that provider
+    # Defaults per provider: openai→gpt-5.2, google→gemini-3-pro-preview, anthropic→claude-opus-4-5-20251101
+    provider: "{{verifier_provider}}"
+    model: "{{verifier_model}}"
+    prompt: |
+      You are conducting a VERIFICATION AUDIT of a completed session.
+
+      Your role: Independent reviewer with NO relationship to the original work.
+      Your mission: Determine if the execution matched the intent.
+      
+      **Cross-Provider Verification**: You are running as {{verifier_provider}}{% if verifier_model %} ({{verifier_model}}){% endif %}.
+      The original session used a DIFFERENT provider, giving you fresh perspective.
+
+      ## Session Evidence
+
+      {{session_context}}
+
+      ## Review Guidelines
+
+      **What constitutes a REAL issue:**
+      - User asked for X, but X wasn't done or was done incorrectly
+      - Assistant claimed to do Y, but tool results show Y failed
+      - Tests were supposed to pass but didn't
+      - Files were supposed to be created but weren't
+      - Errors occurred that weren't acknowledged or addressed
+      - Work was left incomplete without acknowledgment
+
+      **What is NOT an issue (don't nitpick):**
+      - Minor style differences from what was requested
+      - Assistant took a reasonable alternative approach
+      - Small improvements beyond what was asked
+      - Verbose or brief communication style
+      - Things the user didn't actually ask for
+
+      **Be skeptical but fair:**
+      - Claims need evidence in tool results
+      - "I did X" without corresponding tool call = suspicious
+      - Errors in tool output that weren't addressed = issue
+      - But: assistant may have fixed errors in subsequent steps
+
+      ## Your Assessment
+
+      Provide a verification report with:
+
+      ### Verification Metadata
+      - **Original Session**: {{session_id}}
+      - **Original Provider/Model**: [from session_context above]
+      - **Verifier Provider/Model**: {{verifier_provider}}/{{verifier_model | default: "default"}}
+
+      ### Verdict: [PASS | ISSUES FOUND]
+
+      ### Summary
+      2-3 sentences on overall session outcome.
+
+      ### Intent Coverage
+      For each user request, mark:
+      - ✓ VERIFIED: Evidence confirms completion
+      - ✗ GAP: Not done or evidence of failure
+      - ? UNCLEAR: Cannot verify from available evidence
+
+      ### Issues (if any)
+      For each issue found:
+      - **What was expected**: [from intent]
+      - **What was claimed**: [from assistant responses]
+      - **What actually happened**: [from tool results]
+      - **Evidence**: [specific tool output or missing tool call]
+
+      ### Verified Completions
+      Brief list of what WAS successfully verified.
+
+      Be direct and evidence-based. This is an audit, not a performance review.
+    output: "verification_report"
+    timeout: 600
+
+# Output Structure:
+#
+# session_context: Extracted intent/claims/reality from the session
+# verification_report: Final verdict with evidence-based assessment
+#
+# The verification_report contains the final PASS/ISSUES FOUND verdict
+# along with specific evidence for any gaps found.
