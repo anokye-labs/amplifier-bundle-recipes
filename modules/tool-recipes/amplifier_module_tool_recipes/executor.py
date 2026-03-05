@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -1487,6 +1488,20 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
                 ProviderPreference(provider=step.provider, model="")
             ]
 
+        # Build session metadata for child session tracking (navigation graph support)
+        recipe_info = context.get("recipe", {})
+        step_info = context.get("step", {})
+        session_metadata: dict[str, Any] = {
+            "agent_name": step.agent,
+            "recipe_name": recipe_info.get("name", ""),
+            "recipe_step": step.id,
+            "recipe_step_index": step_info.get("index"),
+        }
+        # Include parallel_group_id if this spawn is part of a parallel batch
+        parallel_group_id = context.get("_parallel_group_id")
+        if parallel_group_id:
+            session_metadata["parallel_group_id"] = parallel_group_id
+
         # Spawn sub-session with agent via capability (with step timeout)
         spawn_coro = spawn_fn(
             agent_name=step.agent,
@@ -1496,6 +1511,7 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
             sub_session_id=None,  # Let spawner generate ID
             orchestrator_config=orchestrator_dict,
             provider_preferences=provider_preferences,
+            session_metadata=session_metadata,
         )
         try:
             result = await asyncio.wait_for(spawn_coro, timeout=step.timeout)
@@ -1872,10 +1888,18 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
         # Create semaphore for bounded concurrency (None = unbounded)
         semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent else None
 
+        # Generate a single group ID shared by all iterations in this parallel batch
+        parallel_group_id = str(uuid.uuid4())
+
         async def execute_iteration(idx: int, item: Any) -> Any:
             """Execute a single iteration with isolated context."""
             # Copy context and set loop variable for this iteration
-            iter_context = {**context, loop_var: item}
+            # _parallel_group_id marks all spawns in this batch for the navigation graph
+            iter_context = {
+                **context,
+                loop_var: item,
+                "_parallel_group_id": parallel_group_id,
+            }
 
             try:
                 # Execute based on step type (agent, recipe, or bash)
