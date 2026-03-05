@@ -247,7 +247,7 @@ class RecipeExecutor:
         self.coordinator = coordinator
         self.session_manager = session_manager
 
-    def _show_progress(
+    async def _show_progress(
         self,
         message: str,
         level: str = "info",
@@ -272,7 +272,7 @@ class RecipeExecutor:
         if event_name and event_data:
             hooks = getattr(self.coordinator, "hooks", None)
             if hooks is not None:
-                asyncio.create_task(hooks.emit(event_name, event_data))
+                await hooks.emit(event_name, event_data)
 
     def _build_steps_status(
         self,
@@ -525,7 +525,7 @@ class RecipeExecutor:
         # Show recipe start progress
         total_steps = len(recipe.steps)
         steps_status = self._build_steps_status(recipe.steps, 0, [])
-        self._show_progress(
+        await self._show_progress(
             f"📋 Starting recipe: {recipe.name} ({total_steps} steps)",
             event_name="recipe:start",
             event_data=self._build_recipe_event_data(
@@ -573,7 +573,7 @@ class RecipeExecutor:
                 steps_status = self._build_steps_status(
                     recipe.steps, i, completed_steps
                 )
-                self._show_progress(
+                await self._show_progress(
                     f"  [{step_num}/{total_steps}] {step.id} ({step_type})",
                     event_name="recipe:step",
                     event_data=self._build_recipe_event_data(
@@ -701,7 +701,7 @@ class RecipeExecutor:
             )
             if state is not None:
                 self.session_manager.save_state(session_id, project_path, state)
-            self._show_progress(
+            await self._show_progress(
                 f"⚠️ Recipe cancelled at step: {e.current_step or 'unknown'}",
                 level="warning",
             )
@@ -720,7 +720,7 @@ class RecipeExecutor:
         steps_status = self._build_steps_status(
             recipe.steps, total_steps, completed_steps
         )
-        self._show_progress(
+        await self._show_progress(
             f"✅ Recipe completed: {recipe.name}",
             event_name="recipe:complete",
             event_data=self._build_recipe_event_data(
@@ -827,7 +827,7 @@ class RecipeExecutor:
                 )
 
                 # Show stage progress
-                self._show_progress(
+                await self._show_progress(
                     f"📦 Stage {stage_idx + 1}/{total_stages}: {stage.name}"
                 )
 
@@ -1016,7 +1016,7 @@ class RecipeExecutor:
                         stage.approval.prompt
                         or f"Approve completion of stage '{stage.name}'?"
                     )
-                    self._show_progress(
+                    await self._show_progress(
                         f"⏸️ Waiting for approval: {stage.name}",
                         event_name="recipe:approval",
                         event_data=self._build_recipe_event_data(
@@ -1069,7 +1069,7 @@ class RecipeExecutor:
                 completed_stages,
                 completed_steps,
             )
-            self._show_progress(
+            await self._show_progress(
                 f"⚠️ Recipe cancelled at step: {e.current_step or 'unknown'}",
                 level="warning",
             )
@@ -1095,7 +1095,7 @@ class RecipeExecutor:
         all_steps = [step for stage in recipe.stages for step in stage.steps]
         total_steps = len(all_steps)
         steps_status = self._build_steps_status(all_steps, total_steps, completed_steps)
-        self._show_progress(
+        await self._show_progress(
             f"✅ Recipe completed: {recipe.name}",
             event_name="recipe:complete",
             event_data=self._build_recipe_event_data(
@@ -1998,7 +1998,7 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
                 context["_loop_iteration"] = iteration + 1
 
                 # Emit per-iteration event for convergence dashboards
-                self._show_progress(
+                await self._show_progress(
                     f"  ↻ {step.id} iteration {iteration + 1}"
                     f" / {step.max_while_iterations}",
                     event_name="recipe:loop_iteration",
@@ -2073,7 +2073,7 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
                         if evaluate_condition(resolved_break, context):
                             break
                     except ExpressionError as e:
-                        self._show_progress(
+                        await self._show_progress(
                             f"Step '{step.id}': break_when expression error: {e}",
                             level="warning",
                         )
@@ -2086,7 +2086,7 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
             context.pop("_loop_iteration", None)
 
         # Emit loop completion event
-        self._show_progress(
+        await self._show_progress(
             f"  ✓ {step.id} completed after {iteration} iteration(s)",
             event_name="recipe:loop_complete",
             event_data={
