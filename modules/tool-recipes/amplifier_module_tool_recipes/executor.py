@@ -1498,6 +1498,56 @@ DO NOT return the JSON as a string or with escape characters. Return actual JSON
                     ProviderPreference.from_dict(p) for p in agent_default_prefs
                 ]
 
+        # Fallback 2: if agent has model_role but routing hook hasn't fired yet
+        # (session:start is lazy — first step may execute before hooks populate
+        # provider_preferences), resolve the role directly against the routing matrix.
+        # NOTE: We inline the resolution here instead of importing from
+        # amplifier_hooks_routing because that module lives in a separate venv.
+        if provider_preferences is None:
+            agent_cfg = agents.get(step.agent, {})
+            agent_model_role = agent_cfg.get("model_role")
+            if agent_model_role:
+                routing_state = (
+                    self.coordinator.session_state.get("routing_matrix")
+                    if hasattr(self.coordinator, "session_state")
+                    else None
+                )
+                if routing_state:
+                    roles = (
+                        [agent_model_role]
+                        if isinstance(agent_model_role, str)
+                        else agent_model_role
+                    )
+                    matrix = routing_state.get("roles", {})
+                    installed_providers = self.coordinator.get("providers") or {}
+                    for role in roles:
+                        role_data = matrix.get(role)
+                        if role_data is None:
+                            continue
+                        for candidate in role_data.get("candidates", []):
+                            provider_type = candidate.get("provider", "")
+                            # Flexible provider name matching (e.g. "anthropic" matches
+                            # "provider-anthropic" and vice versa)
+                            provider_match = any(
+                                provider_type
+                                in (
+                                    pn,
+                                    pn.replace("provider-", ""),
+                                    f"provider-{provider_type}",
+                                )
+                                for pn in installed_providers
+                            )
+                            if provider_match:
+                                provider_preferences = [
+                                    ProviderPreference(
+                                        provider=provider_type,
+                                        model=candidate.get("model", ""),
+                                    )
+                                ]
+                                break
+                        if provider_preferences is not None:
+                            break
+
         # Build session metadata for child session tracking (navigation graph support)
         recipe_info = context.get("recipe", {})
         step_info = context.get("step", {})
