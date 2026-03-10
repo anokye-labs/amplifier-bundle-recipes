@@ -41,8 +41,9 @@ class TestAgentProviderPreferencesFallback:
       2. step.model_role
       3. step.provider + step.model
       4. step.provider (only)
-      5. agent config provider_preferences  <-- the fallback under test
-      6. None (inherit parent model)
+      5. agent config provider_preferences  <-- fallback 1 (PR #47)
+      6. agent config model_role resolved directly  <-- fallback 2 (this fix)
+      7. None (inherit parent model)
     """
 
     @pytest.mark.asyncio
@@ -178,3 +179,77 @@ class TestAgentProviderPreferencesFallback:
         assert call_kwargs["provider_preferences"] is None, (
             "Without step or agent prefs, should be None to inherit parent model"
         )
+
+    @pytest.mark.asyncio
+    async def test_agent_model_role_resolved_when_no_prefs_set(
+        self, mock_session_manager, temp_dir
+    ):
+        """Agent model_role resolved directly when routing hook hasn't fired yet.
+
+        Simulates step 1 of a recipe: the routing hook fires lazily (after first
+        child spawn), so provider_preferences is NOT yet in agent config. But
+        model_role IS present. The executor should fall back to resolving the role
+        directly against the routing matrix in session_state.
+        """
+        coordinator = _make_coordinator(
+            agents={
+                "coding-agent": {
+                    "description": "A coding agent",
+                    "model_role": ["coding", "general"],
+                    # NO provider_preferences — routing hook hasn't fired yet
+                }
+            },
+        )
+        # Simulate routing matrix available in session_state
+        coordinator.session_state = {
+            "routing_matrix": {
+                "name": "balanced",
+                "roles": {
+                    "coding": {
+                        "candidates": [
+                            {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+                        ]
+                    },
+                    "general": {
+                        "candidates": [
+                            {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+                        ]
+                    },
+                },
+            }
+        }
+        coordinator.get.return_value = {"anthropic": MagicMock()}
+        mock_spawn = coordinator.get_capability.return_value
+        mock_spawn.return_value = "step result"
+
+        recipe = Recipe(
+            name="test-recipe",
+            description="Test model_role direct resolution fallback",
+            version="1.0.0",
+            steps=[
+                Step(
+                    id="do-work",
+                    agent="coding-agent",
+                    prompt="Write some code",
+                    output="result",
+                ),
+            ],
+            context={},
+        )
+
+        # No sys.modules patching needed — inline resolution doesn't import
+        # from amplifier_hooks_routing (which lives in a separate venv).
+        executor = RecipeExecutor(coordinator, mock_session_manager)
+        await executor.execute_recipe(recipe, {}, temp_dir)
+
+        mock_spawn.assert_called_once()
+        call_kwargs = mock_spawn.call_args[1]
+        prefs = call_kwargs["provider_preferences"]
+
+        assert prefs is not None, (
+            "Expected routing-matrix-resolved prefs, got None — "
+            "agent model_role fallback didn't fire"
+        )
+        assert len(prefs) == 1
+        assert prefs[0].provider == "anthropic"
+        assert prefs[0].model == "claude-sonnet-4-6"
