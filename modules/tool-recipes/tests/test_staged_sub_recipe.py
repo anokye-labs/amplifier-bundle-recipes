@@ -790,6 +790,74 @@ class TestApproveStageForwardsToChild:
 
 
 # =============================================================================
+# Validator Parallel Foreach + Recipe Warning Tests
+# =============================================================================
+
+
+class TestValidatorParallelRecipeWarning:
+    """Tests that validate_recipe warns when parallel foreach is used with type='recipe'."""
+
+    def test_parallel_foreach_recipe_step_produces_warning(self):
+        """A step with parallel=True, foreach, and type='recipe' should produce a warning."""
+        from amplifier_module_tool_recipes.models import Recipe, Step
+        from amplifier_module_tool_recipes.validator import validate_recipe
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            context={"items": ["a", "b"]},
+            steps=[
+                Step(
+                    id="parallel-recipe-step",
+                    type="recipe",
+                    recipe="some-recipe.yaml",
+                    foreach="{{items}}",
+                    parallel=True,
+                )
+            ],
+        )
+
+        result = validate_recipe(recipe)
+
+        # Should produce a warning mentioning both 'parallel' and 'recipe'
+        assert len(result.warnings) >= 1
+        warning_text = " ".join(result.warnings)
+        assert "parallel" in warning_text
+        assert "recipe" in warning_text
+
+    def test_parallel_foreach_agent_step_does_not_produce_warning(self):
+        """A step with parallel=True, foreach, and default type (agent) should NOT produce this warning."""
+        from amplifier_module_tool_recipes.models import Recipe, Step
+        from amplifier_module_tool_recipes.validator import validate_recipe
+
+        recipe = Recipe(
+            name="test",
+            description="test",
+            version="1.0.0",
+            context={"items": ["a", "b"]},
+            steps=[
+                Step(
+                    id="parallel-agent-step",
+                    agent="some-agent",
+                    prompt="Process {{item}}",
+                    foreach="{{items}}",
+                    parallel=True,
+                )
+            ],
+        )
+
+        result = validate_recipe(recipe)
+
+        # The parallel+foreach+agent warning should NOT appear
+        parallel_recipe_warnings = [
+            w for w in result.warnings
+            if "parallel" in w and "recipe" in w
+        ]
+        assert len(parallel_recipe_warnings) == 0
+
+
+# =============================================================================
 # Tool-Level APE Handler Reporting Tests
 # =============================================================================
 

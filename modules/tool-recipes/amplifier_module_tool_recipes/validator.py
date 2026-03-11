@@ -47,6 +47,18 @@ def validate_recipe(recipe: Recipe, coordinator: Any = None) -> ValidationResult
     dep_errors = check_step_dependencies(recipe)
     errors.extend(dep_errors)
 
+    # Parallel foreach + recipe step warning
+    all_steps = list(recipe.steps)
+    for stage in recipe.stages:
+        all_steps.extend(stage.steps)
+    for step in all_steps:
+        if step.foreach and step.parallel and step.type == "recipe":
+            warnings.append(
+                f"Step '{step.id}': parallel foreach with type='recipe' may cause issues "
+                f"if the sub-recipe has approval gates "
+                f"(parallel approval gates are undefined behavior)"
+            )
+
     is_valid = len(errors) == 0
 
     return ValidationResult(
