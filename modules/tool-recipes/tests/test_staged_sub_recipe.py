@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 from amplifier_module_tool_recipes.executor import ApprovalGatePausedError
@@ -695,9 +696,6 @@ class TestApproveStageForwardsToChild:
         """When _approve_stage is called on a session with pending_child_approval,
         _forward_approval is called with correct session_id, project_path, and message.
         """
-        import tempfile
-        from unittest.mock import patch
-
         tool = _make_recipes_tool()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -747,9 +745,6 @@ class TestApproveStageForwardsToChild:
         """When _deny_stage is called on a session with pending_child_approval,
         _forward_denial is called with correct session_id, project_path, and reason.
         """
-        import tempfile
-        from unittest.mock import patch
-
         tool = _make_recipes_tool()
 
         with tempfile.TemporaryDirectory() as tmp:
