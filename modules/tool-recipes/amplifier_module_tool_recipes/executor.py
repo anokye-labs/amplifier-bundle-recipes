@@ -1089,28 +1089,16 @@ class RecipeExecutor:
                             timeout=0,
                             default="deny",
                         )
-                        # (4) Save pending_child_approval metadata to state
-                        _pca_state = {
-                            "session_id": session_id,
-                            "recipe_name": recipe.name,
-                            "recipe_version": recipe.version,
-                            "started": context["session"]["started"],
-                            "current_stage_index": stage_idx,
-                            "current_step_in_stage": step_idx,
-                            "context": context,
-                            "completed_stages": completed_stages,
-                            "completed_steps": completed_steps,
-                            "project_path": str(project_path.resolve()),
-                            "is_staged": True,
-                            "pending_child_approval": {
-                                "child_session_id": e.session_id,
-                                "child_stage_name": e.stage_name,
-                                "parent_step_id": step.id,
-                            },
-                        }
-                        self.session_manager.save_state(
-                            session_id, project_path, _pca_state
+                        # (4) Add pending_child_approval metadata to saved state
+                        state = self.session_manager.load_state(
+                            session_id, project_path
                         )
+                        state["pending_child_approval"] = {
+                            "child_session_id": e.session_id,
+                            "child_stage_name": e.stage_name,
+                            "parent_step_id": step.id,
+                        }
+                        self.session_manager.save_state(session_id, project_path, state)
                         # (5) Re-raise new APE with parent's session_id
                         raise ApprovalGatePausedError(
                             session_id=session_id,

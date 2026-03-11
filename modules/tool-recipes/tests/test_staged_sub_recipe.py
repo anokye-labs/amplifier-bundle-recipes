@@ -446,6 +446,11 @@ class TestStagedLoopApprovalMirroring:
             executor.session_manager.save_state.side_effect = lambda sid, pp, state: (
                 saved_states.append(dict(state))
             )
+            # Wire load_state to return a copy of the last saved state so the
+            # implementation can load-augment-save without getting a MagicMock back
+            executor.session_manager.load_state.side_effect = lambda sid, pp: (
+                dict(saved_states[-1]) if saved_states else {}
+            )
 
             # Mock _execute_recipe_step to raise child APE
             child_error = ApprovalGatePausedError(
