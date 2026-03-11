@@ -796,6 +796,102 @@ Example:
                 error={"message": f"Failed to deny stage: {str(e)}"},
             )
 
+    def _forward_approval(
+        self, session_id: str, project_path: Path, message: str = ""
+    ) -> None:
+        """Forward approval from a parent session to its pending child session.
+
+        Loads parent state and extracts ``pending_child_approval``.  Returns
+        early (idempotent) when no such metadata is present.  Otherwise sets
+        the child stage to APPROVED, propagates ``_approval_message`` into the
+        child state, and recursively forwards if the child itself has a
+        ``pending_child_approval`` (grandchild scenario).  Finally clears the
+        parent's ``pending_child_approval`` metadata.
+
+        Args:
+            session_id: Parent session identifier.
+            project_path: Project directory.
+            message: Approval message to propagate (default: ``""``).
+        """
+        state = self.session_manager.load_state(session_id, project_path)
+        pca = state.get("pending_child_approval")
+        if not pca:
+            return
+
+        child_session_id = pca["child_session_id"]
+        child_stage_name = pca["child_stage_name"]
+
+        # Approve the child stage
+        self.session_manager.set_stage_approval_status(
+            session_id=child_session_id,
+            project_path=project_path,
+            stage_name=child_stage_name,
+            status=ApprovalStatus.APPROVED,
+            reason="Approved by user",
+        )
+
+        # Propagate _approval_message into child state
+        child_state = self.session_manager.load_state(child_session_id, project_path)
+        child_state["_approval_message"] = message
+        self.session_manager.save_state(child_session_id, project_path, child_state)
+
+        # Recursive: forward to grandchild if the child also has pending_child_approval
+        if child_state.get("pending_child_approval"):
+            self._forward_approval(child_session_id, project_path, message=message)
+
+        # Clear parent's pending_child_approval metadata
+        state.pop("pending_child_approval", None)
+        self.session_manager.save_state(session_id, project_path, state)
+
+    def _forward_denial(
+        self,
+        session_id: str,
+        project_path: Path,
+        reason: str = "Denied by user",
+    ) -> None:
+        """Forward denial from a parent session to its pending child session.
+
+        Loads parent state and extracts ``pending_child_approval``.  Returns
+        early (idempotent) when no such metadata is present.  Otherwise sets
+        the child stage to DENIED, clears the child's pending approval, and
+        recursively forwards if the child itself has a
+        ``pending_child_approval`` (grandchild scenario).  Finally clears the
+        parent's ``pending_child_approval`` metadata.
+
+        Args:
+            session_id: Parent session identifier.
+            project_path: Project directory.
+            reason: Denial reason to propagate (default: ``"Denied by user"``).
+        """
+        state = self.session_manager.load_state(session_id, project_path)
+        pca = state.get("pending_child_approval")
+        if not pca:
+            return
+
+        child_session_id = pca["child_session_id"]
+        child_stage_name = pca["child_stage_name"]
+
+        # Deny the child stage
+        self.session_manager.set_stage_approval_status(
+            session_id=child_session_id,
+            project_path=project_path,
+            stage_name=child_stage_name,
+            status=ApprovalStatus.DENIED,
+            reason=reason,
+        )
+
+        # Clear the child's pending approval
+        self.session_manager.clear_pending_approval(child_session_id, project_path)
+
+        # Recursive: forward to grandchild if the child also has pending_child_approval
+        child_state = self.session_manager.load_state(child_session_id, project_path)
+        if child_state.get("pending_child_approval"):
+            self._forward_denial(child_session_id, project_path, reason=reason)
+
+        # Clear parent's pending_child_approval metadata
+        state.pop("pending_child_approval", None)
+        self.session_manager.save_state(session_id, project_path, state)
+
     async def _cancel_recipe(self, input: dict[str, Any]) -> ToolResult:
         """Cancel a running recipe session.
 

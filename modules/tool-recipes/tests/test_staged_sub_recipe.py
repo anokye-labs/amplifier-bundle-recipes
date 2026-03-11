@@ -5,6 +5,7 @@ Tests cover:
 - _execute_recipe_step child session management (save/resume/cleanup)
 - Flat execution loop mirrors child ApprovalGatePausedError to parent
 - Staged execution loop mirrors child ApprovalGatePausedError to parent
+- _forward_approval and _forward_denial helpers on RecipesTool
 """
 
 import tempfile
@@ -508,3 +509,172 @@ class TestStagedLoopApprovalMirroring:
             # 7. State was saved at current step (not advanced)
             assert approval_state.get("current_stage_index") == 0
             assert approval_state.get("current_step_in_stage") == 0
+
+
+# =============================================================================
+# Approval Forwarding Helper Tests
+# =============================================================================
+
+
+def _make_recipes_tool():
+    """Create a RecipesTool with minimal mocks."""
+    from amplifier_module_tool_recipes import RecipesTool
+
+    coordinator = MagicMock()
+    coordinator.get_capability.return_value = None
+
+    session_manager = MagicMock()
+
+    executor = MagicMock()
+
+    return RecipesTool(executor, session_manager, coordinator, {})
+
+
+class TestApprovalForwarding:
+    """Tests for _forward_approval and _forward_denial helper methods on RecipesTool."""
+
+    def test_forward_approval_returns_early_when_no_pending_child_approval(self):
+        """_forward_approval is a no-op when no pending_child_approval exists."""
+        import tempfile
+
+        tool = _make_recipes_tool()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            # State without pending_child_approval
+            tool.session_manager.load_state.return_value = {
+                "session_id": "parent-session",
+            }
+
+            tool._forward_approval("parent-session", tmp_path)
+
+            # Should not have attempted to approve any child session
+            tool.session_manager.set_stage_approval_status.assert_not_called()
+
+    def test_forward_approval_sets_child_approved_and_propagates_message(self):
+        """_forward_approval sets APPROVED on child stage and propagates _approval_message."""
+        import tempfile
+
+        tool = _make_recipes_tool()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            parent_state = {
+                "session_id": "parent-session",
+                "pending_child_approval": {
+                    "child_session_id": "child-session",
+                    "child_stage_name": "review",
+                    "parent_step_id": "call-sub",
+                },
+            }
+            # Child state (no further pending_child_approval for recursion)
+            child_state = {
+                "session_id": "child-session",
+            }
+
+            tool.session_manager.load_state.side_effect = [
+                parent_state,  # First load: parent state
+                child_state,  # Second load: child state for message propagation
+            ]
+
+            tool._forward_approval("parent-session", tmp_path, message="approved!")
+
+            # set_stage_approval_status called on child session with APPROVED
+            tool.session_manager.set_stage_approval_status.assert_called_once_with(
+                session_id="child-session",
+                project_path=tmp_path,
+                stage_name="review",
+                status=ApprovalStatus.APPROVED,
+                reason="Approved by user",
+            )
+
+            # save_state called on child with _approval_message
+            save_calls = tool.session_manager.save_state.call_args_list
+            child_saves = [c for c in save_calls if c[0][0] == "child-session"]
+            assert len(child_saves) >= 1, "Expected save_state called for child session"
+            assert any(
+                c[0][2].get("_approval_message") == "approved!" for c in child_saves
+            ), "_approval_message not propagated to child state"
+
+            # Parent's pending_child_approval metadata should be cleared
+            parent_saves = [c for c in save_calls if c[0][0] == "parent-session"]
+            assert len(parent_saves) >= 1, (
+                "Expected save_state called for parent session"
+            )
+            assert all("pending_child_approval" not in c[0][2] for c in parent_saves), (
+                "pending_child_approval not cleared from parent state"
+            )
+
+    def test_forward_denial_returns_early_when_no_pending_child_approval(self):
+        """_forward_denial is a no-op when no pending_child_approval exists."""
+        import tempfile
+
+        tool = _make_recipes_tool()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            # State without pending_child_approval
+            tool.session_manager.load_state.return_value = {
+                "session_id": "parent-session",
+            }
+
+            tool._forward_denial("parent-session", tmp_path)
+
+            # Should not have attempted to deny any child session
+            tool.session_manager.set_stage_approval_status.assert_not_called()
+
+    def test_forward_denial_sets_child_denied_and_clears_pending(self):
+        """_forward_denial sets DENIED on child stage and clears child's pending approval."""
+        import tempfile
+
+        tool = _make_recipes_tool()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            parent_state = {
+                "session_id": "parent-session",
+                "pending_child_approval": {
+                    "child_session_id": "child-session",
+                    "child_stage_name": "review",
+                    "parent_step_id": "call-sub",
+                },
+            }
+            # Child state (no further pending_child_approval for recursion)
+            child_state = {
+                "session_id": "child-session",
+            }
+
+            tool.session_manager.load_state.side_effect = [
+                parent_state,  # First load: parent state
+                child_state,  # Second load: child state for recursion check
+            ]
+
+            tool._forward_denial("parent-session", tmp_path, reason="User denied")
+
+            # set_stage_approval_status called on child session with DENIED
+            tool.session_manager.set_stage_approval_status.assert_called_once_with(
+                session_id="child-session",
+                project_path=tmp_path,
+                stage_name="review",
+                status=ApprovalStatus.DENIED,
+                reason="User denied",
+            )
+
+            # clear_pending_approval called on child session
+            tool.session_manager.clear_pending_approval.assert_called_once_with(
+                "child-session", tmp_path
+            )
+
+            # Parent's pending_child_approval metadata should be cleared
+            save_calls = tool.session_manager.save_state.call_args_list
+            parent_saves = [c for c in save_calls if c[0][0] == "parent-session"]
+            assert len(parent_saves) >= 1, (
+                "Expected save_state called for parent session"
+            )
+            assert all("pending_child_approval" not in c[0][2] for c in parent_saves), (
+                "pending_child_approval not cleared from parent state"
+            )
